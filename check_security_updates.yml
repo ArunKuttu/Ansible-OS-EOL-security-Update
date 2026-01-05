@@ -1,0 +1,22 @@
+---
+- name: Check for security updates on all servers
+  hosts: all
+  become: yes
+  become_user: sysadmin
+  gather_facts: yes
+  tasks:
+
+    - name: Check for security updates (Debian/Ubuntu)
+      shell: apt-get -s dist-upgrade | grep ^Inst | grep -i security || true
+      register: security_updates
+      when: ansible_facts['os_family'] == "Debian"
+
+
+    - name: Save security updates output (only if variable is defined)
+      local_action:
+        module: copy
+        content: |
+          Server: {{ inventory_hostname }}
+          {{ security_updates.stdout | default("No security updates found or not applicable.") }}
+        dest: "/tmp/security_reports/{{ inventory_hostname }}.txt"
+      when: security_updates is defined
