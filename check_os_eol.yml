@@ -1,0 +1,65 @@
+---
+- name: Check OS EOL status
+  hosts: all
+  gather_facts: yes
+  become: yes
+  become_user: yes
+  vars_files:
+    - os_eol_db.yml
+
+  tasks:
+    - name: Set OS facts
+      set_fact:
+        os_name: "{{ ansible_distribution }}"
+        os_version: "{{ ansible_distribution_version }}"
+
+    - name: Get raw EOL date from database
+      set_fact:
+        raw_eol_date: "{{ os_eol_dates[os_name][os_version] | default('unknown') }}"
+      when: 
+        - os_name in os_eol_dates
+        - os_version in os_eol_dates[os_name]
+
+    - name: Set unknown for missing entries
+      set_fact:
+        raw_eol_date: "unknown"
+      when: 
+        - os_name not in os_eol_dates or 
+          os_version not in os_eol_dates[os_name]
+
+    - name: Clean and validate EOL date
+      set_fact:
+        clean_eol_date: "{{ raw_eol_date | regex_replace('\\s+', '') }}"
+      when: raw_eol_date != 'unknown'
+
+    - name: Calculate EOL status (safe method)
+      block:
+        - name: Convert dates to datetime objects
+          set_fact:
+            eol_datetime: "{{ clean_eol_date | to_datetime('%Y-%m-%d') }}"
+            current_datetime: "{{ ansible_date_time.date | to_datetime('%Y-%m-%d') }}"
+
+        - name: Compare dates
+          set_fact:
+            is_eol_expired: "{{ eol_datetime < current_datetime }}"
+      when: raw_eol_date != 'unknown'
+      ignore_errors: yes
+
+    - name: Set default EOL status
+      set_fact:
+        is_eol_expired: false
+      when: 
+        - raw_eol_date == 'unknown'
+        - is_eol_expired is not defined
+
+    - name: Create EOL report
+      copy:
+        dest: "/tmp/os_eol_report_{{ inventory_hostname }}.txt"
+        content: |
+          Server: {{ inventory_hostname }}
+          OS: {{ os_name }} {{ os_version }}
+          EOL Date: {{ raw_eol_date }}
+          EOL Status: {% if is_eol_expired %}EXPIRED{% else %}Supported{% endif %}
+          Current Date: {{ ansible_date_time.date }}
+          ---------------------------------
+      delegate_to: localhost
